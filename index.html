@@ -1,0 +1,2026 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>E-Absensi SMP - Sistem Presensi Digital Modern</title>
+
+  <!-- PWA Theme Color & Meta -->
+  <meta name="theme-color" content="#DC2626" />
+  <meta name="description" content="Sistem Presensi Siswa SMP Presisi dengan QR Code, Atribut, dan Laporan Realtime" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brandRed: '#DC2626',
+            brandRedDark: '#991B1B',
+            brandOrange: '#EA580C',
+            brandOrangeLight: '#FFF7ED',
+            brandYellow: '#F59E0B'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React & Babel CDNs -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Canvas QR Code Generator Library -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #F8FAFC;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    .gradient-header {
+      background: linear-gradient(135deg, #DC2626 0%, #EA580C 100%);
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #F97316;
+      border-radius: 4px;
+    }
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .animate-pulse-slow {
+      animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased min-h-screen">
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // Configuration & Fallbacks
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'eabsensi-smp-app';
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    
+    // Default fallback firebase config if environment config is not injected
+    const firebaseConfig = typeof __firebase_config !== 'undefined' 
+      ? JSON.parse(__firebase_config) 
+      : {
+          apiKey: "AIzaSyDemoConfigKeyForEAbsensiOnlineSync123",
+          authDomain: "eabsensi-smp.firebaseapp.com",
+          projectId: "eabsensi-smp",
+          storageBucket: "eabsensi-smp.appspot.com",
+          messagingSenderId: "102938475610",
+          appId: "1:102938475610:web:9876543210abcdef"
+        };
+
+    let app, auth, db;
+    try {
+      app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+      db = getFirestore(app);
+    } catch (e) {
+      console.warn("Firebase initialization notice:", e);
+    }
+
+    // Expose Bridge to React App
+    window.FirebaseBridge = {
+      app, auth, db, appId, initialAuthToken,
+      signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+      doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection,
+      isConfigured: !!db
+    };
+
+    window.dispatchEvent(new Event('firebase-bridge-ready'));
+  </script>
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- DAFTAR KELAS STANDARDISASI LENGKAP A-G (7A-7G, 8A-8G, 9A-9G) ---
+    const KELAS_LIST = [
+      '7A', '7B', '7C', '7D', '7E', '7F', '7G',
+      '8A', '8B', '8C', '8D', '8E', '8F', '8G',
+      '9A', '9B', '9C', '9D', '9E', '9F', '9G'
+    ];
+
+    const ATRIBUT_HARI = {
+      'Senin': ['Dasi', 'Kaus kaki putih', 'Lokasi sekolah', 'Logo sekolah', 'Bendera', 'Nama', 'Kartu QR', 'Pemeriksaan kuku'],
+      'Selasa': ['Kaus kaki putih', 'Pemeriksaan kuku'],
+      'Rabu': ['Kacu', 'Kaus kaki hitam', 'Nama', 'Nama pahlawan', 'Pemeriksaan kuku'],
+      'Kamis': ['Dasi', 'Kaus kaki putih', 'Lokasi sekolah', 'Logo sekolah', 'Bendera', 'Nama', 'Kartu QR', 'Pemeriksaan kuku'],
+      'Jumat': ['Kaus kaki putih', 'Nama', 'Pemeriksaan kuku'],
+      'Sabtu': ['Kaus kaki putih', 'Nama', 'Pemeriksaan kuku'],
+      'Minggu': []
+    };
+
+    const INITIAL_SCHEDULE = {
+      startTime: "05:30",
+      onTimeLimit: "06:30",
+      updatedBy: "Petugas OSIS",
+      updatedAt: new Date().toISOString()
+    };
+
+    // --- NORMALISASI NOMOR TELEPON & WAKTU ASIA/JAKARTA ---
+    function normalizePhone(phone) {
+      if (!phone) return '';
+      let clean = String(phone).trim().replace(/\D/g, '');
+      if (clean.startsWith('62')) {
+        clean = '0' + clean.slice(2);
+      }
+      return clean;
+    }
+
+    function getJakartaDate() {
+      const options = { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' };
+      const formatter = new Intl.DateTimeFormat('en-CA', options);
+      return formatter.format(new Date()); // YYYY-MM-DD
+    }
+
+    function getJakartaTimeString() {
+      return new Date().toLocaleTimeString('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).replace(/\./g, ':');
+    }
+
+    function getJakartaDayName() {
+      const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+      const dateInJakarta = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
+      return days[dateInJakarta.getDay()];
+    }
+
+    function App() {
+      // Local Database Store & Fallbacks
+      const [students, setStudents] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_students');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [attendance, setAttendance] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_attendance');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [teachers, setTeachers] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_teachers');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [schedule, setSchedule] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_schedule');
+        return saved ? JSON.parse(saved) : INITIAL_SCHEDULE;
+      });
+
+      const [permits, setPermits] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_permits');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [announcements, setAnnouncements] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_announcements');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [grades, setGrades] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_grades');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      const [attributeChecks, setAttributeChecks] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_attribute_checks');
+        return saved ? JSON.parse(saved) : [];
+      });
+
+      // User session state
+      const [currentUser, setCurrentUser] = useState(() => {
+        const saved = localStorage.getItem('eabsensi_current_user');
+        return saved ? JSON.parse(saved) : null;
+      });
+
+      // Realtime Clock
+      const [currentTime, setCurrentTime] = useState(getJakartaTimeString());
+      const [currentDateStr, setCurrentDateStr] = useState('');
+      const [currentDay, setCurrentDay] = useState(getJakartaDayName());
+
+      // UI Control & Sync Indicators
+      const [activeTab, setActiveTab] = useState('home');
+      const [notification, setNotification] = useState(null);
+      const [showLogoutModal, setShowLogoutModal] = useState(false);
+      const [cloudStatus, setCloudStatus] = useState('syncing'); // 'connected', 'syncing', 'offline'
+      const [firebaseUser, setFirebaseUser] = useState(null);
+
+      // Firebase Cloud Sync Setup
+      useEffect(() => {
+        let unsubscribes = [];
+
+        const initCloudSync = async () => {
+          const fb = window.FirebaseBridge;
+          if (!fb || !fb.isConfigured) {
+            setCloudStatus('offline');
+            return;
+          }
+
+          try {
+            // Authenticate first
+            if (fb.initialAuthToken) {
+              await fb.signInWithCustomToken(fb.auth, fb.initialAuthToken);
+            } else {
+              await fb.signInAnonymously(fb.auth);
+            }
+
+            fb.onAuthStateChanged(fb.auth, (user) => {
+              if (user) {
+                setFirebaseUser(user);
+                setCloudStatus('connected');
+                
+                // Helper for collection listeners
+                const listenCollection = (colName, setter) => {
+                  try {
+                    const colRef = fb.collection(fb.db, 'artifacts', fb.appId, 'public', 'data', colName);
+                    const unsub = fb.onSnapshot(colRef, (snapshot) => {
+                      const data = [];
+                      snapshot.forEach(doc => data.push(doc.data()));
+                      if (data.length > 0) {
+                        setter(data);
+                        localStorage.setItem(`eabsensi_${colName}`, JSON.stringify(data));
+                      }
+                    }, (err) => {
+                      console.warn(`Collection ${colName} listener notice:`, err);
+                    });
+                    unsubscribes.push(unsub);
+                  } catch (e) {
+                    console.warn(`Error setting up ${colName} sync:`, e);
+                  }
+                };
+
+                // Attach real-time listeners for all public collections
+                listenCollection('students', setStudents);
+                listenCollection('attendance', setAttendance);
+                listenCollection('teachers', setTeachers);
+                listenCollection('permits', setPermits);
+                listenCollection('announcements', setAnnouncements);
+                listenCollection('grades', setGrades);
+                listenCollection('attribute_checks', setAttributeChecks);
+
+                // Schedule Listener (doc level)
+                try {
+                  const schedRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'config', 'schedule');
+                  const unsubSched = fb.onSnapshot(schedRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                      const scData = docSnap.data();
+                      setSchedule(scData);
+                      localStorage.setItem('eabsensi_schedule', JSON.stringify(scData));
+                    }
+                  }, () => {});
+                  unsubscribes.push(unsubSched);
+                } catch (e) {}
+              }
+            });
+          } catch (e) {
+            console.warn("Cloud auth sync fallback:", e);
+            setCloudStatus('offline');
+          }
+        };
+
+        if (window.FirebaseBridge) {
+          initCloudSync();
+        } else {
+          window.addEventListener('firebase-bridge-ready', initCloudSync);
+        }
+
+        return () => {
+          unsubscribes.forEach(unsub => unsub && unsub());
+          window.removeEventListener('firebase-bridge-ready', initCloudSync);
+        };
+      }, []);
+
+      // Local Persistence Sync
+      useEffect(() => { localStorage.setItem('eabsensi_students', JSON.stringify(students)); }, [students]);
+      useEffect(() => { localStorage.setItem('eabsensi_attendance', JSON.stringify(attendance)); }, [attendance]);
+      useEffect(() => { localStorage.setItem('eabsensi_teachers', JSON.stringify(teachers)); }, [teachers]);
+      useEffect(() => { localStorage.setItem('eabsensi_schedule', JSON.stringify(schedule)); }, [schedule]);
+      useEffect(() => { localStorage.setItem('eabsensi_permits', JSON.stringify(permits)); }, [permits]);
+      useEffect(() => { localStorage.setItem('eabsensi_announcements', JSON.stringify(announcements)); }, [announcements]);
+      useEffect(() => { localStorage.setItem('eabsensi_grades', JSON.stringify(grades)); }, [grades]);
+      useEffect(() => { localStorage.setItem('eabsensi_attribute_checks', JSON.stringify(attributeChecks)); }, [attributeChecks]);
+      useEffect(() => { localStorage.setItem('eabsensi_current_user', JSON.stringify(currentUser)); }, [currentUser]);
+
+      // Clock Interval
+      useEffect(() => {
+        const timer = setInterval(() => {
+          setCurrentTime(getJakartaTimeString());
+          setCurrentDay(getJakartaDayName());
+          
+          const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Jakarta' };
+          setCurrentDateStr(new Date().toLocaleDateString('id-ID', options));
+        }, 1000);
+        return () => clearInterval(timer);
+      }, []);
+
+      // Cloud Saver Helper Function
+      const saveToCloud = async (collectionName, docId, data) => {
+        const fb = window.FirebaseBridge;
+        if (fb && fb.isConfigured && fb.auth?.currentUser) {
+          try {
+            const docRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', collectionName, docId);
+            await fb.setDoc(docRef, data, { merge: true });
+          } catch (e) {
+            console.warn(`Failed to sync ${collectionName} to cloud:`, e);
+          }
+        }
+      };
+
+      const showToast = (message, type = 'success') => {
+        setNotification({ message, type });
+        setTimeout(() => setNotification(null), 4000);
+      };
+
+      // PERMANENT LOGOUT EXECUTION
+      const executePermanentLogout = async () => {
+        if (!currentUser) return;
+
+        if (currentUser.role === 'WALI_KELAS') {
+          const updatedTeachers = teachers.filter(t => normalizePhone(t.phone) !== normalizePhone(currentUser.phone) && t.class !== currentUser.class);
+          setTeachers(updatedTeachers);
+          
+          // Delete teacher doc from Firestore if synced
+          const fb = window.FirebaseBridge;
+          if (fb && fb.isConfigured && fb.auth?.currentUser) {
+            try {
+              const docId = `TCH-${currentUser.class}`;
+              const docRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'teachers', docId);
+              await fb.deleteDoc(docRef);
+            } catch (e) {}
+          }
+        } else if (currentUser.role === 'WALI_MURID') {
+          const updatedStudents = students.filter(s => s.id !== currentUser.studentId && normalizePhone(s.parentPhone) !== normalizePhone(currentUser.phone));
+          setStudents(updatedStudents);
+        }
+
+        setCurrentUser(null);
+        localStorage.removeItem('eabsensi_current_user');
+        setActiveTab('home');
+        setShowLogoutModal(false);
+        showToast("Akun Anda telah dihapus secara permanen dari perangkat ini.", "info");
+      };
+
+      return (
+        <div className="max-w-md mx-auto bg-white min-h-screen shadow-2xl relative flex flex-col pb-20">
+          
+          {/* TOAST NOTIFICATION */}
+          {notification && (
+            <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 w-11/12 max-w-sm px-4 py-3 rounded-xl shadow-lg text-white font-medium text-sm flex items-center justify-between transition-all duration-300 ${
+              notification.type === 'error' ? 'bg-red-600' : notification.type === 'warning' ? 'bg-amber-600' : 'bg-emerald-600'
+            }`}>
+              <div className="flex items-center space-x-2">
+                <span>{notification.type === 'error' ? '⚠️' : '✅'}</span>
+                <span>{notification.message}</span>
+              </div>
+              <button onClick={() => setNotification(null)} className="text-white font-bold ml-2">×</button>
+            </div>
+          )}
+
+          {/* HEADER DENGAN TEMA MERAH-ORANYE (TANPA TOMBOL DB CLOUD) */}
+          <header className="gradient-header text-white p-5 rounded-b-3xl shadow-lg relative overflow-hidden z-10">
+            <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-white/10 rounded-full blur-xl pointer-events-none"></div>
+            
+            <div className="flex justify-between items-center mb-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center text-brandRed font-black text-xl shadow-md">
+                  E
+                </div>
+                <div>
+                  <h1 className="text-lg font-bold tracking-tight leading-none">E-ABSENSI SMP</h1>
+                  <p className="text-xs text-orange-100 mt-0.5">Sistem Presensi Presisi Real-time</p>
+                </div>
+              </div>
+
+              {/* AUTOMATIC CLOUD STATUS BADGE (NO BUTTON) */}
+              <div className="flex items-center space-x-1.5 bg-black/20 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/20 text-[10px] text-white font-medium">
+                <span className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'bg-emerald-400 animate-pulse-slow' : cloudStatus === 'syncing' ? 'bg-amber-400 animate-pulse' : 'bg-slate-400'}`}></span>
+                <span>{cloudStatus === 'connected' ? 'Cloud Sync' : cloudStatus === 'syncing' ? 'Menghubungkan' : 'Lokal'}</span>
+              </div>
+            </div>
+
+            {/* JAM REALTIME WIB */}
+            <div className="bg-black/20 backdrop-blur-md rounded-2xl p-3 border border-white/10 flex justify-between items-center mt-2">
+              <div>
+                <div className="text-xs font-medium text-orange-200">{currentDateStr || "Memuat Tanggal..."}</div>
+                <div className="text-xs text-orange-100 font-semibold">Hari: <span className="text-white font-bold">{currentDay}</span></div>
+              </div>
+              <div className="text-right">
+                <div className="text-xl font-black font-mono tracking-wider text-yellow-300">{currentTime}</div>
+                <div className="text-[10px] text-orange-200 uppercase tracking-widest font-bold">WIB (Asia/Jakarta)</div>
+              </div>
+            </div>
+
+            {/* USER PROFILE BRIEF WITH TOUCH-OPTIMIZED LOGOUT BUTTON */}
+            {currentUser && (
+              <div className="mt-3 pt-3 border-t border-white/20 flex justify-between items-center text-xs relative z-20">
+                <div className="truncate mr-2">
+                  <span className="opacity-80">Akun: </span>
+                  <strong className="font-bold text-yellow-200">{currentUser.name}</strong> 
+                  <span className="ml-1.5 bg-white/20 px-2 py-0.5 rounded-full text-[10px] uppercase font-bold">{currentUser.role}</span>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setShowLogoutModal(true)} 
+                  className="bg-red-900 hover:bg-black text-white font-bold px-3 py-1.5 rounded-xl shadow-md text-[11px] border border-red-400 shrink-0 touch-manipulation active:scale-95 transition"
+                >
+                  🗑️ Hapus Akun
+                </button>
+              </div>
+            )}
+          </header>
+
+          <main className="flex-1 p-4 overflow-y-auto custom-scrollbar">
+            {!currentUser ? (
+              <AuthFlow 
+                onLogin={setCurrentUser} 
+                students={students} 
+                setStudents={setStudents}
+                teachers={teachers}
+                setTeachers={setTeachers}
+                saveToCloud={saveToCloud}
+                showToast={showToast}
+              />
+            ) : (
+              <>
+                {currentUser.role === 'WALI_MURID' && (
+                  <WaliMuridDashboard 
+                    user={currentUser} 
+                    students={students} 
+                    attendance={attendance}
+                    permits={permits}
+                    setPermits={setPermits}
+                    announcements={announcements}
+                    grades={grades}
+                    saveToCloud={saveToCloud}
+                    showToast={showToast}
+                    activeTab={activeTab}
+                  />
+                )}
+
+                {currentUser.role === 'WALI_KELAS' && (
+                  <WaliKelasDashboard 
+                    user={currentUser} 
+                    students={students} 
+                    setStudents={setStudents}
+                    teachers={teachers}
+                    setTeachers={setTeachers}
+                    attendance={attendance}
+                    setAttendance={setAttendance}
+                    permits={permits}
+                    setPermits={setPermits}
+                    schedule={schedule}
+                    announcements={announcements}
+                    setAnnouncements={setAnnouncements}
+                    grades={grades}
+                    setGrades={setGrades}
+                    attributeChecks={attributeChecks}
+                    setAttributeChecks={setAttributeChecks}
+                    saveToCloud={saveToCloud}
+                    showToast={showToast}
+                    activeTab={activeTab}
+                  />
+                )}
+
+                {currentUser.role === 'OSIS' && (
+                  <OsisDashboard 
+                    user={currentUser} 
+                    students={students} 
+                    attendance={attendance}
+                    setAttendance={setAttendance}
+                    schedule={schedule}
+                    setSchedule={setSchedule}
+                    attributeChecks={attributeChecks}
+                    setAttributeChecks={setAttributeChecks}
+                    saveToCloud={saveToCloud}
+                    showToast={showToast}
+                    activeTab={activeTab}
+                  />
+                )}
+              </>
+            )}
+          </main>
+
+          {/* FOOTER NAVIGATION */}
+          {currentUser && (
+            <BottomNav 
+              role={currentUser.role} 
+              activeTab={activeTab} 
+              setActiveTab={setActiveTab} 
+            />
+          )}
+
+          {/* CUSTOM LOGOUT PERMANENT CONFIRMATION MODAL */}
+          {showLogoutModal && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4 border-2 border-red-500">
+                <div className="text-center">
+                  <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-2xl mx-auto mb-2 font-bold">
+                    ⚠️
+                  </div>
+                  <h3 className="font-black text-slate-800 text-base">Hapus Akun & Logout Permanen</h3>
+                  <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                    Apakah Anda yakin? Tindakan ini akan <strong>menghapus akun</strong> dari perangkat ini dan membersihkan klaim kelas/sesi agar dapat digunakan akun lain.
+                  </p>
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button 
+                    onClick={() => setShowLogoutModal(false)}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition"
+                  >
+                    Batal
+                  </button>
+                  <button 
+                    onClick={executePermanentLogout}
+                    className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-md transition"
+                  >
+                    Ya, Hapus Akun
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function AuthFlow({ onLogin, students, setStudents, teachers, setTeachers, saveToCloud, showToast }) {
+      const [selectedRole, setSelectedRole] = useState(null); // 'WALI_MURID', 'WALI_KELAS', 'OSIS'
+
+      // Form Data States
+      const [parentForm, setParentForm] = useState({ parentName: '', parentPhone: '', studentName: '', studentClass: '7A', photo: '' });
+      const [teacherForm, setTeacherForm] = useState({ name: '', classAssigned: '7A', phone: '' });
+      const [osisForm, setOsisForm] = useState({ name: '', phone: '', pin: '' });
+      const [regStep, setRegStep] = useState(1);
+
+      // Handle Image Upload for Student
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          if (file.size > 2 * 1024 * 1024) {
+            showToast("Ukuran foto maksimal 2MB!", "error");
+            return;
+          }
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setParentForm(prev => ({ ...prev, photo: reader.result }));
+          };
+          reader.readAsDataURL(file);
+        }
+      };
+
+      // Register or Login Wali Murid
+      const handleParentSubmit = async (e) => {
+        e.preventDefault();
+        const cleanPhone = normalizePhone(parentForm.parentPhone);
+        if (!cleanPhone) {
+          showToast("Nomor HP orang tua wajib diisi!", "error");
+          return;
+        }
+
+        // Check if parent phone already exists in database
+        const existingStudent = students.find(s => normalizePhone(s.parentPhone) === cleanPhone);
+        if (existingStudent) {
+          showToast(`Selamat datang kembali, ${existingStudent.parentName}!`);
+          onLogin({
+            role: 'WALI_MURID',
+            name: existingStudent.parentName,
+            phone: cleanPhone,
+            studentId: existingStudent.id
+          });
+          return;
+        }
+
+        // Registration mode
+        if (!parentForm.parentName.trim() || !parentForm.studentName.trim() || !parentForm.photo) {
+          showToast("Mohon lengkapi nama ortu, nama siswa, dan foto siswa!", "error");
+          return;
+        }
+
+        const newId = `STD-${parentForm.studentClass}-${Date.now().toString().slice(-4)}`;
+        const newStudent = {
+          id: newId,
+          name: parentForm.studentName.trim(),
+          class: parentForm.studentClass,
+          parentName: parentForm.parentName.trim(),
+          parentPhone: cleanPhone,
+          photo: parentForm.photo,
+          qrCode: newId,
+          createdAt: new Date().toISOString()
+        };
+
+        setStudents(prev => [...prev, newStudent]);
+        await saveToCloud('students', newId, newStudent);
+
+        showToast("Pendaftaran Wali Murid Berhasil! QR Code Dibuat & Tersinkron Cloud.");
+        onLogin({
+          role: 'WALI_MURID',
+          name: parentForm.parentName.trim(),
+          phone: cleanPhone,
+          studentId: newId
+        });
+      };
+
+      // Register or Login Wali Kelas
+      const handleTeacherSubmit = async (e) => {
+        e.preventDefault();
+        const cleanPhone = normalizePhone(teacherForm.phone);
+        if (!cleanPhone) {
+          showToast("Nomor HP Wali Kelas wajib diisi!", "error");
+          return;
+        }
+
+        const existingTeacher = teachers.find(t => normalizePhone(t.phone) === cleanPhone);
+        if (existingTeacher) {
+          showToast(`Selamat datang kembali, ${existingTeacher.name}!`);
+          onLogin({
+            role: 'WALI_KELAS',
+            name: existingTeacher.name,
+            phone: cleanPhone,
+            class: existingTeacher.class
+          });
+          return;
+        }
+
+        if (!teacherForm.name.trim()) {
+          showToast("Isi nama Wali Kelas lengkap!", "error");
+          return;
+        }
+
+        const classOccupied = teachers.find(t => t.class === teacherForm.classAssigned);
+        if (classOccupied) {
+          showToast(`Kelas ${teacherForm.classAssigned} sudah diklaim oleh Wali Kelas (${classOccupied.name})!`, "error");
+          return;
+        }
+
+        const newTeacherDocId = `TCH-${teacherForm.classAssigned}`;
+        const newTeacher = { 
+          id: newTeacherDocId, 
+          name: teacherForm.name.trim(), 
+          class: teacherForm.classAssigned, 
+          phone: cleanPhone,
+          createdAt: new Date().toISOString()
+        };
+
+        setTeachers(prev => [...prev, newTeacher]);
+        await saveToCloud('teachers', newTeacherDocId, newTeacher);
+
+        showToast("Pendaftaran Wali Kelas Berhasil!");
+        onLogin({
+          role: 'WALI_KELAS',
+          name: teacherForm.name.trim(),
+          phone: cleanPhone,
+          class: teacherForm.classAssigned
+        });
+      };
+
+      // Register or Login OSIS
+      const handleOsisSubmit = (e) => {
+        e.preventDefault();
+        const cleanPhone = normalizePhone(osisForm.phone);
+        if (!cleanPhone) {
+          showToast("Nomor HP petugas OSIS wajib diisi!", "error");
+          return;
+        }
+
+        if (osisForm.pin !== "OSIS2026") {
+          showToast("Kode Aktivasi OSIS salah! Gunakan: OSIS2026", "error");
+          return;
+        }
+
+        showToast("Akses OSIS Berhasil Diterima!");
+        onLogin({
+          role: 'OSIS',
+          name: osisForm.name.trim() || "Petugas OSIS",
+          phone: cleanPhone
+        });
+      };
+
+      return (
+        <div className="space-y-6 my-2">
+          {!selectedRole ? (
+            <div className="space-y-4">
+              <div className="text-center">
+                <h2 className="font-bold text-slate-800 text-base">Pilih Peran Pengguna</h2>
+                <p className="text-xs text-slate-500 mt-1">Pilih peran Anda untuk masuk atau mendaftar</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setSelectedRole('WALI_MURID')}
+                  className="p-4 bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-200 hover:border-red-500 rounded-2xl flex items-center space-x-4 text-left transition group shadow-sm active:scale-98"
+                >
+                  <div className="w-12 h-12 bg-gradient-to-tr from-red-600 to-orange-500 rounded-2xl flex items-center justify-center text-white text-xl font-bold shadow">
+                    👨‍👩‍👧
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-slate-800 text-sm group-hover:text-red-600">Wali Murid</h3>
+                    <p className="text-xs text-slate-500">Daftarkan anak, dapatkan Kartu QR, dan ajukan izin</p>
+                  </div>
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => setSelectedRole('WALI_KELAS')}
+                  className="p-4 bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-200 hover:border-red-500 rounded-2xl flex items-center space-x-4 text-left transition group shadow-sm active:scale-98"
+                >
+                  <div className="w-12 h-12 bg-gradient-to-tr from-red-600 to-orange-500 rounded-2xl flex items-center justify-center text-white text-xl font-bold shadow">
+                    👩‍🏫
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-slate-800 text-sm group-hover:text-red-600">Wali Kelas</h3>
+                    <p className="text-xs text-slate-500">Klaim kelas ampuan, kelola absensi, & rekap bulanan</p>
+                  </div>
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => setSelectedRole('OSIS')}
+                  className="p-4 bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-200 hover:border-red-500 rounded-2xl flex items-center space-x-4 text-left transition group shadow-sm active:scale-98"
+                >
+                  <div className="w-12 h-12 bg-gradient-to-tr from-red-600 to-orange-500 rounded-2xl flex items-center justify-center text-white text-xl font-bold shadow">
+                    ⭐
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-slate-800 text-sm group-hover:text-red-600">Petugas OSIS</h3>
+                    <p className="text-xs text-slate-500">Pemindaian QR presensi & pemeriksaan atribut</p>
+                  </div>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex justify-between items-center pb-2 border-b">
+                <button 
+                  type="button"
+                  onClick={() => { setSelectedRole(null); setRegStep(1); }}
+                  className="text-xs font-bold text-red-600 flex items-center space-x-1"
+                >
+                  <span>←</span> <span>Ganti Peran</span>
+                </button>
+                <span className="text-xs font-bold bg-orange-100 text-orange-800 px-2.5 py-1 rounded-lg">
+                  {selectedRole === 'WALI_MURID' ? 'Wali Murid' : selectedRole === 'WALI_KELAS' ? 'Wali Kelas' : 'Petugas OSIS'}
+                </span>
+              </div>
+
+              {/* FORM WALI MURID */}
+              {selectedRole === 'WALI_MURID' && (
+                <form onSubmit={handleParentSubmit} className="space-y-4">
+                  <div className="flex items-center space-x-2 text-xs font-bold text-slate-600">
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center ${regStep === 1 ? 'bg-red-600 text-white' : 'bg-emerald-500 text-white'}`}>1</span>
+                    <span>Data Ortu</span>
+                    <span>→</span>
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center ${regStep === 2 ? 'bg-red-600 text-white' : 'bg-slate-200 text-slate-600'}`}>2</span>
+                    <span>Data Siswa & Foto</span>
+                  </div>
+
+                  {regStep === 1 ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Nomor HP / WhatsApp Orang Tua</label>
+                        <input 
+                          type="tel" 
+                          placeholder="08xxxxxxxxxx" 
+                          value={parentForm.parentPhone}
+                          onChange={(e) => setParentForm({ ...parentForm, parentPhone: e.target.value })}
+                          className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                          required 
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">Jika No. HP sudah pernah didaftarkan, Anda akan langsung masuk ke Dashboard.</p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Nama Orang Tua / Wali</label>
+                        <input 
+                          type="text" 
+                          placeholder="Nama lengkap Ayah/Ibu" 
+                          value={parentForm.parentName}
+                          onChange={(e) => setParentForm({ ...parentForm, parentName: e.target.value })}
+                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                        />
+                      </div>
+
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          if (!parentForm.parentPhone) {
+                            showToast("Isi Nomor HP orang tua terlebih dahulu!", "error");
+                            return;
+                          }
+                          const cleanP = normalizePhone(parentForm.parentPhone);
+                          const exists = students.find(s => normalizePhone(s.parentPhone) === cleanP);
+                          if (exists) {
+                            onLogin({
+                              role: 'WALI_MURID',
+                              name: exists.parentName,
+                              phone: cleanP,
+                              studentId: exists.id
+                            });
+                            showToast(`Selamat datang kembali, ${exists.parentName}`);
+                          } else {
+                            setRegStep(2);
+                          }
+                        }}
+                        className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow mt-2"
+                      >
+                        Lanjut Ke Tahap 2: Data Siswa →
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Nama Lengkap Siswa</label>
+                        <input 
+                          type="text" 
+                          placeholder="Nama anak lengkap" 
+                          value={parentForm.studentName}
+                          onChange={(e) => setParentForm({ ...parentForm, studentName: e.target.value })}
+                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                          required 
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Pilih Kelas Siswa (7A-9G)</label>
+                        <select 
+                          value={parentForm.studentClass}
+                          onChange={(e) => setParentForm({ ...parentForm, studentClass: e.target.value })}
+                          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none bg-white"
+                        >
+                          {KELAS_LIST.map(k => (
+                            <option key={k} value={k}>Kelas {k}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Foto Siswa (Identitas Kartu QR)</label>
+                        <input 
+                          type="file" 
+                          accept="image/*"
+                          onChange={handleImageUpload}
+                          className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-orange-100 file:text-orange-800 hover:file:bg-orange-200"
+                        />
+                        {parentForm.photo && (
+                          <div className="mt-2 text-center">
+                            <img src={parentForm.photo} alt="Preview Siswa" className="w-20 h-20 object-cover rounded-2xl mx-auto border-2 border-red-500 shadow-sm" />
+                            <span className="text-[10px] text-emerald-600 font-bold block mt-1">✓ Foto Siap Digunakan</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex space-x-2 pt-2">
+                        <button 
+                          type="button" 
+                          onClick={() => setRegStep(1)}
+                          className="w-1/3 py-2.5 bg-slate-200 text-slate-700 text-xs font-bold rounded-xl"
+                        >
+                          ← Kembali
+                        </button>
+                        <button 
+                          type="submit" 
+                          className="w-2/3 py-2.5 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow"
+                        >
+                          Simpan & Buat Kartu QR
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </form>
+              )}
+
+              {/* FORM WALI KELAS */}
+              {selectedRole === 'WALI_KELAS' && (
+                <form onSubmit={handleTeacherSubmit} className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Nomor HP Aktif Wali Kelas</label>
+                    <input 
+                      type="tel" 
+                      placeholder="08xxxxxxxxxx" 
+                      value={teacherForm.phone}
+                      onChange={(e) => setTeacherForm({ ...teacherForm, phone: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                      required 
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Nama Wali Kelas (Dengan Gelar)</label>
+                    <input 
+                      type="text" 
+                      placeholder="Dra. Hj. Siti Aminah" 
+                      value={teacherForm.name}
+                      onChange={(e) => setTeacherForm({ ...teacherForm, name: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Kelas Ampuan (1 Kelas = 1 Wali Kelas)</label>
+                    <select 
+                      value={teacherForm.classAssigned}
+                      onChange={(e) => setTeacherForm({ ...teacherForm, classAssigned: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none bg-white"
+                    >
+                      {KELAS_LIST.map(k => (
+                        <option key={k} value={k}>Kelas {k}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button type="submit" className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow mt-2">
+                    Masuk / Daftar Wali Kelas
+                  </button>
+                </form>
+              )}
+
+              {/* FORM OSIS */}
+              {selectedRole === 'OSIS' && (
+                <form onSubmit={handleOsisSubmit} className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Nama Petugas OSIS</label>
+                    <input 
+                      type="text" 
+                      placeholder="Nama lengkap petugas" 
+                      value={osisForm.name}
+                      onChange={(e) => setOsisForm({ ...osisForm, name: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                      required 
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Nomor HP Petugas</label>
+                    <input 
+                      type="tel" 
+                      placeholder="08xxxxxxxxxx" 
+                      value={osisForm.phone}
+                      onChange={(e) => setOsisForm({ ...osisForm, phone: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                      required 
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Kode Aktivasi OSIS</label>
+                    <input 
+                      type="password" 
+                      placeholder="Ketik: OSIS2026" 
+                      value={osisForm.pin}
+                      onChange={(e) => setOsisForm({ ...osisForm, pin: e.target.value })}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:outline-none"
+                      required 
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Kode aktivasi standar: <span className="font-mono text-red-600 font-bold">OSIS2026</span></p>
+                  </div>
+
+                  <button type="submit" className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow mt-2">
+                    Aktivasi Akses OSIS
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function QRCodeView({ qrValue, studentName }) {
+      const canvasRef = useRef(null);
+      const [qrLoaded, setQrLoaded] = useState(false);
+      const [fallbackImgUrl, setFallbackImgUrl] = useState('');
+
+      useEffect(() => {
+        let timer;
+        const renderQR = () => {
+          if (canvasRef.current && window.QRCode) {
+            try {
+              window.QRCode.toCanvas(canvasRef.current, qrValue, {
+                width: 140,
+                margin: 1,
+                color: { dark: '#000000', light: '#FFFFFF' }
+              }, (error) => {
+                if (error) {
+                  setFallbackImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrValue)}`);
+                } else {
+                  setQrLoaded(true);
+                }
+              });
+            } catch (err) {
+              setFallbackImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrValue)}`);
+            }
+          } else {
+            setFallbackImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrValue)}`);
+          }
+        };
+
+        renderQR();
+        timer = setTimeout(renderQR, 500);
+        return () => clearTimeout(timer);
+      }, [qrValue]);
+
+      const handleDownload = () => {
+        let imageUrl = '';
+        if (canvasRef.current && qrLoaded) {
+          imageUrl = canvasRef.current.toDataURL("image/png");
+        } else if (fallbackImgUrl) {
+          imageUrl = fallbackImgUrl;
+        }
+
+        if (imageUrl) {
+          const a = document.createElement("a");
+          a.href = imageUrl;
+          a.download = `Kartu_QR_${studentName.replace(/\s+/g, '_')}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+      };
+
+      return (
+        <div className="flex flex-col items-center justify-center p-3 bg-white rounded-2xl border border-slate-200 shadow-sm space-y-2">
+          <div className="relative p-2 bg-white rounded-xl shadow-inner border">
+            {fallbackImgUrl && !qrLoaded ? (
+              <img src={fallbackImgUrl} alt="QR Code Siswa" className="w-32 h-32 rounded-lg object-contain" />
+            ) : (
+              <canvas ref={canvasRef} className="rounded-lg shadow-sm"></canvas>
+            )}
+          </div>
+          <button 
+            type="button"
+            onClick={handleDownload}
+            className="w-full py-2 bg-gradient-to-r from-red-600 to-orange-500 hover:from-red-700 hover:to-orange-600 text-white text-xs font-bold rounded-xl shadow active:scale-95 transition flex items-center justify-center space-x-1"
+          >
+            <span>📥</span> <span>Unduh Kartu QR (PNG)</span>
+          </button>
+        </div>
+      );
+    }
+
+    function WaliMuridDashboard({ user, students, attendance, permits, setPermits, announcements, grades, saveToCloud, showToast, activeTab }) {
+      const student = students.find(s => s.id === user.studentId || normalizePhone(s.parentPhone) === normalizePhone(user.phone));
+      const todayDate = getJakartaDate();
+      const todayAttendance = attendance.find(a => a.studentId === student?.id && a.date === todayDate);
+
+      const [permitForm, setPermitForm] = useState({ date: todayDate, type: 'Izin', reason: '', proofPhoto: '' });
+
+      const handlePermitSubmit = async (e) => {
+        e.preventDefault();
+        if (!permitForm.reason) {
+          showToast("Jelaskan alasan izin / sakit!", "error");
+          return;
+        }
+
+        if (!student) {
+          showToast("Data profil siswa tidak ditemukan!", "error");
+          return;
+        }
+
+        const permitId = `PRM-${Date.now()}`;
+        const newPermit = {
+          id: permitId,
+          studentId: student.id,
+          studentName: student.name,
+          class: student.class,
+          date: permitForm.date,
+          type: permitForm.type,
+          reason: permitForm.reason,
+          proofPhoto: permitForm.proofPhoto,
+          status: 'PENDING',
+          submittedAt: new Date().toISOString()
+        };
+
+        setPermits(prev => [newPermit, ...prev]);
+        await saveToCloud('permits', permitId, newPermit);
+
+        showToast("Pengajuan izin berhasil dikirim ke Wali Kelas & Cloud!");
+        setPermitForm({ date: todayDate, type: 'Izin', reason: '', proofPhoto: '' });
+      };
+
+      const myGrades = grades.filter(g => g.studentId === student?.id);
+
+      return (
+        <div className="space-y-4">
+          {(activeTab === 'home' || activeTab === 'status') && (
+            <div className="space-y-4">
+              {/* STUDENT ID CARD WITH IMMEDIATE QR CODE */}
+              <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white p-4 rounded-2xl shadow-md relative overflow-hidden">
+                <div className="absolute top-0 right-0 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase">
+                  Kartu Siswa Digital
+                </div>
+                {student ? (
+                  <div className="flex items-center space-x-3 mt-2">
+                    <img src={student.photo || "https://placehold.co/100x100/DC2626/FFFFFF?text=Siswa"} alt={student.name} className="w-16 h-16 rounded-2xl object-cover border-2 border-orange-500 shadow" />
+                    <div>
+                      <h2 className="font-bold text-base text-white">{student.name}</h2>
+                      <p className="text-xs text-orange-300 font-semibold">Kelas: {student.class}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">ID Siswa: {student.id}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 text-amber-300 text-xs font-medium">
+                    Profil belum lengkap. Silakan hubungi admin sekolah.
+                  </div>
+                )}
+
+                {student && (
+                  <div className="mt-4 pt-3 border-t border-slate-700/80">
+                    <p className="text-[11px] text-orange-300 font-bold mb-2">Kartu QR Presensi Digital Siswa:</p>
+                    <QRCodeView qrValue={student.qrCode || student.id} studentName={student.name} />
+                  </div>
+                )}
+              </div>
+
+              {/* STATUS ABSENSI HARI INI */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Status Presensi Hari Ini</h3>
+                {todayAttendance ? (
+                  <div className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                    <div className="flex items-center space-x-3">
+                      <span className="text-2xl">✅</span>
+                      <div>
+                        <div className="text-sm font-bold text-emerald-900">Anak Anda Sudah Sampai di Sekolah</div>
+                        <div className="text-xs text-emerald-700">Waktu Scan: <strong>{todayAttendance.time} WIB</strong> ({todayAttendance.status})</div>
+                        {todayAttendance.note && (
+                          <div className="mt-1.5 p-2 bg-yellow-100 border border-yellow-300 rounded-lg text-xs text-yellow-900 font-medium">
+                            📩 Catatan Sekolah: "{todayAttendance.note}"
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                    <div className="flex items-center space-x-3">
+                      <span className="text-2xl">⏳</span>
+                      <div>
+                        <div className="text-sm font-bold text-amber-900">Belum Melakukan Absensi</div>
+                        <div className="text-xs text-amber-700">Siswa belum dipindai QR-nya oleh OSIS hari ini.</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* PENGUMUMAN SEKOLAH */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Pengumuman Terbaru</h3>
+                {announcements.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">Belum ada pengumuman sekolah.</p>
+                ) : (
+                  announcements.map(ann => (
+                    <div key={ann.id} className="p-3 bg-orange-50 border border-orange-100 rounded-xl">
+                      <div className="flex justify-between items-center text-xs font-bold text-orange-900">
+                        <span>{ann.title}</span>
+                        <span className="text-[10px] text-orange-700 opacity-80">{ann.date}</span>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-1">{ann.content}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB SURAT IZIN */}
+          {activeTab === 'permit' && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <h2 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                <span>📝</span> <span>Form Permohonan Izin / Sakit</span>
+              </h2>
+
+              <form onSubmit={handlePermitSubmit} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Tanggal Izin</label>
+                  <input 
+                    type="date" 
+                    value={permitForm.date}
+                    onChange={(e) => setPermitForm({ ...permitForm, date: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:outline-none"
+                    required 
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Kategori Izin</label>
+                  <div className="flex space-x-2">
+                    <button 
+                      type="button" 
+                      onClick={() => setPermitForm({ ...permitForm, type: 'Izin' })}
+                      className={`flex-1 py-2 text-xs font-bold rounded-xl border ${permitForm.type === 'Izin' ? 'bg-orange-500 text-white border-orange-500' : 'bg-slate-50 text-slate-700'}`}
+                    >
+                      Izin
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={() => setPermitForm({ ...permitForm, type: 'Sakit' })}
+                      className={`flex-1 py-2 text-xs font-bold rounded-xl border ${permitForm.type === 'Sakit' ? 'bg-red-500 text-white border-red-500' : 'bg-slate-50 text-slate-700'}`}
+                    >
+                      Sakit
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Alasan Lengkap</label>
+                  <textarea 
+                    rows="3" 
+                    placeholder="Tuliskan alasan perizinan..." 
+                    value={permitForm.reason}
+                    onChange={(e) => setPermitForm({ ...permitForm, reason: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:outline-none"
+                    required
+                  ></textarea>
+                </div>
+
+                <button type="submit" className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow">
+                  Kirim Surat Izin Ke Wali Kelas
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* TAB NILAI */}
+          {activeTab === 'grades' && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+              <h2 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                <span>🎓</span> <span>Laporan Nilai Siswa</span>
+              </h2>
+
+              {myGrades.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">Belum ada nilai yang dimasukkan Wali Kelas.</p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {myGrades.map((g, idx) => (
+                    <div key={idx} className="py-2.5 flex justify-between items-center">
+                      <div>
+                        <div className="text-xs font-bold text-slate-800">{g.subject}</div>
+                        <div className="text-[10px] text-slate-400">{g.semester}</div>
+                      </div>
+                      <div className="text-sm font-black text-red-600 bg-red-50 px-3 py-1 rounded-xl border border-red-100">
+                        {g.score}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function WaliKelasDashboard({ 
+      user, students, setStudents, teachers, setTeachers, attendance, setAttendance, 
+      permits, setPermits, schedule, announcements, setAnnouncements, 
+      grades, setGrades, attributeChecks, setAttributeChecks, saveToCloud, showToast, activeTab 
+    }) {
+      const myClass = user.class;
+      const classStudents = students.filter(s => s.class === myClass);
+      const todayDate = getJakartaDate();
+
+      // Form Manual Attendance
+      const [manualStudentId, setManualStudentId] = useState('');
+      const [manualStatus, setManualStatus] = useState('Hadir');
+      const [manualNote, setManualNote] = useState('');
+
+      // Form Grades
+      const [gradeStudentId, setGradeStudentId] = useState('');
+      const [gradeSubject, setGradeSubject] = useState('Matematika');
+      const [gradeScore, setGradeScore] = useState('');
+
+      // Form Announcement
+      const [annTitle, setAnnTitle] = useState('');
+      const [annContent, setAnnContent] = useState('');
+
+      // Quick Stats
+      const todayClassAttendance = attendance.filter(a => a.class === myClass && a.date === todayDate);
+      const totalStudents = classStudents.length;
+      const totalHadir = todayClassAttendance.filter(a => a.status === 'Hadir').length;
+      const totalTerlambat = todayClassAttendance.filter(a => a.status === 'Terlambat').length;
+
+      const handleManualAttendance = async (e) => {
+        e.preventDefault();
+        if (!manualStudentId) {
+          showToast("Pilih siswa terlebih dahulu!", "error");
+          return;
+        }
+
+        const exists = attendance.find(a => a.studentId === manualStudentId && a.date === todayDate);
+        if (exists) {
+          showToast("Siswa ini sudah melakukan absensi hari ini!", "warning");
+          return;
+        }
+
+        const st = classStudents.find(s => s.id === manualStudentId);
+        const attId = `ATT-${Date.now()}`;
+        const newRecord = {
+          id: attId,
+          studentId: st.id,
+          studentName: st.name,
+          class: myClass,
+          date: todayDate,
+          time: getJakartaTimeString(),
+          status: manualStatus,
+          method: 'MANUAL_TANPA_QR',
+          officer: `Wali Kelas (${user.name})`,
+          note: manualNote || "Diabsenkan manual oleh Wali Kelas"
+        };
+
+        setAttendance(prev => [newRecord, ...prev]);
+        await saveToCloud('attendance', attId, newRecord);
+
+        showToast(`Absensi manual berhasil disimpan untuk ${st.name}`);
+        setManualNote('');
+      };
+
+      const handleAddGrade = async (e) => {
+        e.preventDefault();
+        if (!gradeStudentId || !gradeScore) {
+          showToast("Lengkapi form nilai!", "error");
+          return;
+        }
+
+        const gradeId = `GRD-${Date.now()}`;
+        const newGrade = {
+          id: gradeId,
+          studentId: gradeStudentId,
+          subject: gradeSubject,
+          score: parseInt(gradeScore),
+          semester: "Ganjil"
+        };
+
+        setGrades(prev => [...prev, newGrade]);
+        await saveToCloud('grades', gradeId, newGrade);
+
+        showToast("Nilai berhasil disimpan ke Cloud!");
+        setGradeScore('');
+      };
+
+      const handlePermitAction = async (permitId, newStatus) => {
+        setPermits(prev => prev.map(p => p.id === permitId ? { ...p, status: newStatus } : p));
+        const pObj = permits.find(p => p.id === permitId);
+        if (pObj) {
+          await saveToCloud('permits', permitId, { ...pObj, status: newStatus });
+        }
+        showToast(`Status izin diperbarui: ${newStatus}`);
+      };
+
+      const handleAddAnnouncement = async (e) => {
+        e.preventDefault();
+        if (!annTitle || !annContent) return;
+
+        const annId = `ANN-${Date.now()}`;
+        const newAnn = {
+          id: annId,
+          title: annTitle,
+          content: annContent,
+          date: todayDate,
+          author: `Wali Kelas ${myClass}`
+        };
+
+        setAnnouncements(prev => [newAnn, ...prev]);
+        await saveToCloud('announcements', annId, newAnn);
+
+        showToast("Pengumuman berhasil dipublikasikan ke Cloud!");
+        setAnnTitle('');
+        setAnnContent('');
+      };
+
+      return (
+        <div className="space-y-4">
+          {(activeTab === 'home' || activeTab === 'data') && (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-red-600 to-orange-500 text-white p-4 rounded-2xl shadow-sm flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] uppercase font-bold tracking-widest text-orange-200">Wali Kelas Aktif</span>
+                  <h2 className="text-lg font-black">{myClass} - {user.name}</h2>
+                  <p className="text-xs text-orange-100">Total Siswa: {totalStudents} Orang</p>
+                </div>
+                <div className="text-right bg-white/20 px-3 py-2 rounded-xl backdrop-blur-sm">
+                  <div className="text-xs text-orange-100 font-bold">Kehadiran Hari Ini</div>
+                  <div className="text-lg font-black text-yellow-300">{totalHadir + totalTerlambat} / {totalStudents}</div>
+                </div>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Daftar Siswa Kelas {myClass}</h3>
+                
+                {classStudents.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">Belum ada siswa terdaftar di kelas ini.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {classStudents.map(s => {
+                      const attToday = attendance.find(a => a.studentId === s.id && a.date === todayDate);
+                      return (
+                        <div key={s.id} className="py-2.5 flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <img src={s.photo || "https://placehold.co/80x80/DC2626/FFFFFF?text=Siswa"} alt={s.name} className="w-10 h-10 rounded-xl object-cover border" />
+                            <div>
+                              <div className="text-xs font-bold text-slate-800">{s.name}</div>
+                              <div className="text-[10px] text-slate-400">Ortu: {s.parentName} ({s.parentPhone})</div>
+                            </div>
+                          </div>
+                          <div>
+                            {attToday ? (
+                              <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${
+                                attToday.status === 'Hadir' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {attToday.status} ({attToday.time})
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded-lg">
+                                Belum Absen
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB ABSENSI MANUAL */}
+          {activeTab === 'manual' && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <h2 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                <span>✋</span> <span>Absensi Manual Siswa (Lupa QR)</span>
+              </h2>
+
+              <form onSubmit={handleManualAttendance} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Pilih Siswa Kelas {myClass}</label>
+                  <select 
+                    value={manualStudentId}
+                    onChange={(e) => setManualStudentId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:outline-none bg-white"
+                  >
+                    <option value="">-- Pilih Nama Siswa --</option>
+                    {classStudents.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Status Kehadiran</label>
+                  <select 
+                    value={manualStatus}
+                    onChange={(e) => setManualStatus(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:outline-none bg-white"
+                  >
+                    <option value="Hadir">Hadir</option>
+                    <option value="Terlambat">Terlambat</option>
+                    <option value="Sakit">Sakit</option>
+                    <option value="Izin">Izin</option>
+                    <option value="Alpa">Alpa</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Pesan Teguran Ringan ke Ortu (Opsional)</label>
+                  <textarea 
+                    rows="2" 
+                    placeholder="Contoh: Siswa lupa membawa kartu QR hari ini." 
+                    value={manualNote}
+                    onChange={(e) => setManualNote(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:outline-none"
+                  ></textarea>
+                </div>
+
+                <button type="submit" className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow">
+                  Simpan Presensi Manual
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* TAB REKAP BULANAN */}
+          {activeTab === 'rekap' && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="font-bold text-slate-800 text-sm">📊 Rekap Bulanan Kelas {myClass}</h2>
+                <button 
+                  type="button"
+                  onClick={() => window.print()} 
+                  className="px-2.5 py-1 bg-slate-800 text-white text-[10px] font-bold rounded-lg"
+                >
+                  🖨️ Cetak
+                </button>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-orange-50 text-orange-900 border-b border-orange-200">
+                      <th className="p-2 font-bold">Nama Siswa</th>
+                      <th className="p-2 font-bold text-center">Hadir</th>
+                      <th className="p-2 font-bold text-center">Late</th>
+                      <th className="p-2 font-bold text-center">Izin</th>
+                      <th className="p-2 font-bold text-center">Alpa</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {classStudents.map(s => {
+                      const sAtt = attendance.filter(a => a.studentId === s.id);
+                      const h = sAtt.filter(a => a.status === 'Hadir').length;
+                      const t = sAtt.filter(a => a.status === 'Terlambat').length;
+                      const i = sAtt.filter(a => a.status === 'Izin' || a.status === 'Sakit').length;
+                      const a = sAtt.filter(a => a.status === 'Alpa').length;
+
+                      return (
+                        <tr key={s.id} className="hover:bg-slate-50">
+                          <td className="p-2 font-medium text-slate-800">{s.name}</td>
+                          <td className="p-2 text-center text-emerald-600 font-bold">{h}</td>
+                          <td className="p-2 text-center text-amber-600 font-bold">{t}</td>
+                          <td className="p-2 text-center text-blue-600 font-bold">{i}</td>
+                          <td className="p-2 text-center text-red-600 font-bold">{a}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB KELOLA & SURAT IZIN */}
+          {activeTab === 'more' && (
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Surat Izin Orang Tua</h3>
+                {permits.filter(p => p.class === myClass).length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">Belum ada surat izin.</p>
+                ) : (
+                  permits.filter(p => p.class === myClass).map(p => (
+                    <div key={p.id} className="p-3 bg-slate-50 rounded-xl border space-y-2 text-xs">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-bold text-slate-800">{p.studentName} ({p.type})</div>
+                          <div className="text-[10px] text-slate-500">Tanggal: {p.date}</div>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          p.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {p.status}
+                        </span>
+                      </div>
+                      <p className="text-slate-600 bg-white p-2 rounded border">{p.reason}</p>
+                      
+                      {p.status === 'PENDING' && (
+                        <div className="flex space-x-2 pt-1">
+                          <button 
+                            type="button"
+                            onClick={() => handlePermitAction(p.id, 'APPROVED')}
+                            className="flex-1 py-1.5 bg-emerald-600 text-white rounded-lg font-bold text-[11px]"
+                          >
+                            Setujui
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => handlePermitAction(p.id, 'REJECTED')}
+                            className="flex-1 py-1.5 bg-red-600 text-white rounded-lg font-bold text-[11px]"
+                          >
+                            Tolak
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* INPUT NILAI */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Input Nilai Siswa</h3>
+                <form onSubmit={handleAddGrade} className="space-y-2">
+                  <select 
+                    value={gradeStudentId}
+                    onChange={(e) => setGradeStudentId(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs border rounded-xl bg-white"
+                  >
+                    <option value="">-- Pilih Siswa --</option>
+                    {classStudents.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+
+                  <div className="flex space-x-2">
+                    <input 
+                      type="text" 
+                      placeholder="Mata Pelajaran" 
+                      value={gradeSubject}
+                      onChange={(e) => setGradeSubject(e.target.value)}
+                      className="flex-1 px-3 py-1.5 text-xs border rounded-xl"
+                    />
+                    <input 
+                      type="number" 
+                      placeholder="Nilai (0-100)" 
+                      value={gradeScore}
+                      onChange={(e) => setGradeScore(e.target.value)}
+                      className="w-24 px-3 py-1.5 text-xs border rounded-xl"
+                    />
+                  </div>
+
+                  <button type="submit" className="w-full py-2 bg-slate-800 text-white text-xs font-bold rounded-xl">
+                    Simpan Nilai
+                  </button>
+                </form>
+              </div>
+
+              {/* BUAT PENGUMUMAN */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Buat Pengumuman Kelas</h3>
+                <form onSubmit={handleAddAnnouncement} className="space-y-2">
+                  <input 
+                    type="text" 
+                    placeholder="Judul Pengumuman" 
+                    value={annTitle}
+                    onChange={(e) => setAnnTitle(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs border rounded-xl"
+                  />
+                  <textarea 
+                    rows="2" 
+                    placeholder="Isi Pengumuman..." 
+                    value={annContent}
+                    onChange={(e) => setAnnContent(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs border rounded-xl"
+                  ></textarea>
+                  <button type="submit" className="w-full py-2 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl">
+                    Publikasikan Pengumuman
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function OsisDashboard({ 
+      user, students, attendance, setAttendance, 
+      schedule, setSchedule, attributeChecks, setAttributeChecks, saveToCloud, showToast, activeTab 
+    }) {
+      const todayDate = getJakartaDate();
+      const todayDayName = getJakartaDayName();
+
+      const [scanMode, setScanMode] = useState('ATTENDANCE'); // 'ATTENDANCE' or 'ATTRIBUTE'
+      const [scannedStudent, setScannedStudent] = useState(null);
+      const [attributeForm, setAttributeForm] = useState({});
+
+      const [newStartTime, setNewStartTime] = useState(schedule.startTime);
+      const [newOnTimeLimit, setNewOnTimeLimit] = useState(schedule.onTimeLimit);
+
+      const requiredAttributes = ATRIBUT_HARI[todayDayName] || [];
+
+      const handleProcessQRCode = async (qrString) => {
+        const found = students.find(s => s.qrCode === qrString || s.id === qrString);
+        if (!found) {
+          showToast("QR Code tidak valid / Siswa tidak ditemukan!", "error");
+          return;
+        }
+
+        setScannedStudent(found);
+
+        if (scanMode === 'ATTENDANCE') {
+          const alreadyAttended = attendance.find(a => a.studentId === found.id && a.date === todayDate);
+          if (alreadyAttended) {
+            showToast(`Siswa ${found.name} sudah melakukan absensi hari ini (${alreadyAttended.time} WIB)!`, "warning");
+            return;
+          }
+
+          const nowTimeStr = getJakartaTimeString();
+          const isLate = nowTimeStr > schedule.onTimeLimit;
+          const statusResult = isLate ? "Terlambat" : "Hadir";
+
+          const attId = `ATT-${Date.now()}`;
+          const newAttendanceRecord = {
+            id: attId,
+            studentId: found.id,
+            studentName: found.name,
+            class: found.class,
+            date: todayDate,
+            time: nowTimeStr,
+            status: statusResult,
+            method: 'SCAN_QR',
+            officer: `OSIS (${user.name})`,
+            note: isLate ? "Terlambat hadir setelah jam batas" : "Hadir tepat waktu"
+          };
+
+          setAttendance(prev => [newAttendanceRecord, ...prev]);
+          await saveToCloud('attendance', attId, newAttendanceRecord);
+
+          showToast(`BERHASIL: Absensi ${found.name} (${statusResult}) tersimpan ke Cloud!`, isLate ? "warning" : "success");
+        }
+      };
+
+      const handleSaveAttributes = async () => {
+        if (!scannedStudent) return;
+
+        const attrId = `ATTR-${Date.now()}`;
+        const record = {
+          id: attrId,
+          studentId: scannedStudent.id,
+          studentName: scannedStudent.name,
+          class: scannedStudent.class,
+          date: todayDate,
+          day: todayDayName,
+          checks: attributeForm,
+          officer: user.name
+        };
+
+        setAttributeChecks(prev => [record, ...prev]);
+        await saveToCloud('attribute_checks', attrId, record);
+
+        showToast(`Pemeriksaan atribut ${scannedStudent.name} tersimpan di Cloud!`);
+        setScannedStudent(null);
+        setAttributeForm({});
+      };
+
+      const handleUpdateSchedule = async (e) => {
+        e.preventDefault();
+        const scData = {
+          startTime: newStartTime,
+          onTimeLimit: newOnTimeLimit,
+          updatedBy: user.name,
+          updatedAt: new Date().toISOString()
+        };
+        setSchedule(scData);
+        await saveToCloud('config', 'schedule', scData);
+
+        showToast("Jadwal jam masuk berhasil diperbarui!");
+      };
+
+      return (
+        <div className="space-y-4">
+          {(activeTab === 'home' || activeTab === 'scan') && (
+            <div className="space-y-4">
+              <div className="flex bg-slate-200 p-1 rounded-xl">
+                <button 
+                  type="button"
+                  onClick={() => { setScanMode('ATTENDANCE'); setScannedStudent(null); }}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${scanMode === 'ATTENDANCE' ? 'bg-red-600 text-white shadow' : 'text-slate-700'}`}
+                >
+                  Mode Scan Absensi
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => { setScanMode('ATTRIBUTE'); setScannedStudent(null); }}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${scanMode === 'ATTRIBUTE' ? 'bg-orange-500 text-white shadow' : 'text-slate-700'}`}
+                >
+                  Mode Pemeriksaan Atribut
+                </button>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    {scanMode === 'ATTENDANCE' ? '📷 Pemindai Kartu QR Absensi' : '👕 Pemindai Seragam Siswa'}
+                  </h3>
+                  <span className="text-[10px] bg-red-100 text-red-800 font-bold px-2 py-0.5 rounded-full">Kamera HP Ready</span>
+                </div>
+
+                {/* SIMULATOR SCAN BUTTONS */}
+                <div className="p-3 bg-orange-50 rounded-xl border border-orange-200 space-y-1.5">
+                  <div className="text-[11px] font-bold text-orange-900">Pilih Siswa Untuk Dipindai QR:</div>
+                  {students.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">Belum ada siswa terdaftar.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {students.map(s => (
+                        <button 
+                          key={s.id}
+                          type="button"
+                          onClick={() => handleProcessQRCode(s.qrCode || s.id)}
+                          className="px-2.5 py-1 bg-white hover:bg-orange-200 text-orange-900 border border-orange-300 rounded-lg text-xs font-medium shadow-sm transition"
+                        >
+                          Scan {s.name.split(' ')[0]} ({s.class})
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {scannedStudent && (
+                  <div className="p-4 bg-slate-900 text-white rounded-2xl shadow-lg border-2 border-orange-500 space-y-3">
+                    <div className="flex items-center space-x-3">
+                      <img src={scannedStudent.photo || "https://placehold.co/100x100/DC2626/FFFFFF?text=Siswa"} alt={scannedStudent.name} className="w-16 h-16 rounded-2xl object-cover border-2 border-orange-400" />
+                      <div>
+                        <h4 className="font-bold text-base text-white">{scannedStudent.name}</h4>
+                        <p className="text-xs text-orange-300 font-semibold">Kelas: {scannedStudent.class}</p>
+
+                        {/* MODE ABSENSI SHOWS PARENT NAME */}
+                        {scanMode === 'ATTENDANCE' && (
+                          <p className="text-xs text-slate-300 mt-1">Wali Murid: <strong className="text-white">{scannedStudent.parentName}</strong></p>
+                        )}
+
+                        {/* MODE ATRIBUT HIDES PARENT NAME FOR PRIVACY */}
+                        {scanMode === 'ATTRIBUTE' && (
+                          <p className="text-[10px] text-orange-400 mt-0.5">🔒 Nama Wali Murid Disembunyikan (Mode Atribut)</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {scanMode === 'ATTRIBUTE' && (
+                      <div className="mt-3 pt-3 border-t border-slate-700 space-y-2">
+                        <div className="text-xs font-bold text-yellow-300">
+                          Pemeriksaan Atribut Hari {todayDayName}:
+                        </div>
+                        {requiredAttributes.length === 0 ? (
+                          <p className="text-xs text-slate-400">Tidak ada atribut khusus hari ini.</p>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            {requiredAttributes.map(item => (
+                              <label key={item} className="flex items-center space-x-2 bg-slate-800 p-2 rounded-xl border border-slate-700 cursor-pointer">
+                                <input 
+                                  type="checkbox" 
+                                  checked={!!attributeForm[item]} 
+                                  onChange={(e) => setAttributeForm({ ...attributeForm, [item]: e.target.checked })}
+                                  className="w-4 h-4 text-orange-500 rounded focus:ring-0"
+                                />
+                                <span className="text-slate-200">{item}</span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+
+                        <button 
+                          type="button"
+                          onClick={handleSaveAttributes}
+                          className="w-full py-2.5 bg-gradient-to-r from-red-600 to-orange-500 text-white font-bold text-xs rounded-xl shadow mt-2"
+                        >
+                          Simpan Hasil Atribut
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB JAM MASUK */}
+          {activeTab === 'schedule' && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                  <span>⏰</span> <span>Pengaturan Jam Masuk Sekolah</span>
+                </h2>
+                <span className="text-[10px] bg-red-100 text-red-800 font-bold px-2 py-0.5 rounded-full">Kewenangan OSIS</span>
+              </div>
+
+              <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-900 space-y-1">
+                <p className="font-bold">Aturan Jadwal Aktif Saat Ini:</p>
+                <p>• Mulai Absensi: <strong>{schedule.startTime} WIB</strong></p>
+                <p>• Batas Tepat Waktu: <strong>{schedule.onTimeLimit} WIB</strong></p>
+                <p className="text-[10px] text-orange-700 mt-1">Terakhir diubah oleh: {schedule.updatedBy}</p>
+              </div>
+
+              <form onSubmit={handleUpdateSchedule} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Jam Mulai Absensi</label>
+                  <input 
+                    type="time" 
+                    value={newStartTime}
+                    onChange={(e) => setNewStartTime(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:outline-none"
+                    required 
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Batas Maksimal Tepat Waktu (Hadir)</label>
+                  <input 
+                    type="time" 
+                    value={newOnTimeLimit}
+                    onChange={(e) => setNewOnTimeLimit(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:outline-none"
+                    required 
+                  />
+                </div>
+
+                <button type="submit" className="w-full py-3 bg-gradient-to-r from-red-600 to-orange-500 text-white text-xs font-bold rounded-xl shadow">
+                  Simpan Perubahan Jadwal
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function BottomNav({ role, activeTab, setActiveTab }) {
+      return (
+        <nav className="fixed bottom-0 left-1/2 transform -translate-x-1/2 w-full max-w-md bg-white border-t border-slate-200 px-4 py-2 flex justify-around items-center z-40 shadow-lg">
+          <button 
+            type="button"
+            onClick={() => setActiveTab('home')}
+            className={`flex flex-col items-center space-y-0.5 ${activeTab === 'home' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+          >
+            <span className="text-lg">🏠</span>
+            <span className="text-[10px]">Beranda</span>
+          </button>
+
+          {role === 'WALI_MURID' && (
+            <>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('permit')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'permit' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">📝</span>
+                <span className="text-[10px]">Surat Izin</span>
+              </button>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('grades')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'grades' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">🎓</span>
+                <span className="text-[10px]">Nilai Anak</span>
+              </button>
+            </>
+          )}
+
+          {role === 'WALI_KELAS' && (
+            <>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('manual')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'manual' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">✋</span>
+                <span className="text-[10px]">Absen Manual</span>
+              </button>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('rekap')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'rekap' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">📊</span>
+                <span className="text-[10px]">Rekap Bulanan</span>
+              </button>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('more')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'more' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">⚙️</span>
+                <span className="text-[10px]">Kelola</span>
+              </button>
+            </>
+          )}
+
+          {role === 'OSIS' && (
+            <>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('scan')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'scan' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">📷</span>
+                <span className="text-[10px]">Scan Kartu</span>
+              </button>
+              <button 
+                type="button"
+                onClick={() => setActiveTab('schedule')}
+                className={`flex flex-col items-center space-y-0.5 ${activeTab === 'schedule' ? 'text-red-600 font-bold' : 'text-slate-400'}`}
+              >
+                <span className="text-lg">⏰</span>
+                <span className="text-[10px]">Jam Masuk</span>
+              </button>
+            </>
+          )}
+        </nav>
+      );
+    }
+
+    // Root Render
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
